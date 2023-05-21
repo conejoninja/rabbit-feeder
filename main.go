@@ -1,10 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"machine"
 	"time"
+
 	"tinygo.org/x/drivers/at24cx"
-	"tinygo.org/x/drivers/net/mqtt"
 	"tinygo.org/x/drivers/wifinina"
 
 	"tinygo.org/x/drivers/bme280"
@@ -24,17 +25,35 @@ var (
 	rtc               ds3231.Device
 	temperatureSensor bme280.Device
 	eeprom            at24cx.Device
+
+	distanceSensorEnabled    bool
+	temperatureSensorEnabled bool
+	rtcEnabled               bool
+	eepromEnabled            bool
+
+	sensorData [7]Value
 )
 
 const (
 	Alarm1     = 0
 	LastAlarm1 = 4
-	NextAlarm1 = 8
-	Quantity1  = 12
-	Alarm2     = 20
-	LastAlarm2 = 24
-	NextAlarm3 = 28
-	Quantity4  = 32
+	NextAlarm1 = 12
+	Quantity1  = 20
+	Alarm2     = 24
+	LastAlarm2 = 28
+	NextAlarm3 = 36
+	Quantity4  = 44
+	NextRecord = 48
+)
+
+const (
+	DISTANCE = iota
+	DISTANCE_RAW
+	MEMORY
+	TEMPERATURE
+	PRESSURE
+	HUMIDITY
+	RTC
 )
 
 func main() {
@@ -46,11 +65,12 @@ func main() {
 
 	// SETUP DISTANCE SENSOR
 	distanceSensor = vl6180x.New(machine.I2C0)
-	connected := distanceSensor.Connected()
-	if !connected {
+	distanceSensorEnabled = distanceSensor.Connected()
+	if !distanceSensorEnabled {
 		println("VL6180X device not found")
+	} else {
+		distanceSensor.Configure(true)
 	}
-	distanceSensor.Configure(true)
 
 	// SETUP BME280
 	temperatureSensor = bme280.New(machine.I2C0)
@@ -67,17 +87,20 @@ func main() {
 		rtc.SetTime(date)
 	}
 
-	running := rtc.IsRunning()
-	if !running {
+	rtcEnabled = rtc.IsRunning()
+	if !rtcEnabled {
 		err := rtc.SetRunning(true)
 		if err != nil {
 			println("Error configuring RTC")
+		} else {
+			rtcEnabled = true
 		}
 	}
 
 	// SETUP EEPROM
 	eeprom := at24cx.New(machine.I2C0)
 	eeprom.Configure(at24cx.Config{})
+	eepromEnabled = true // assume it's working
 
 	// SETUP RELAY
 	relay = [4]machine.Pin{
@@ -116,34 +139,55 @@ func main() {
 	adaptor.Configure()
 
 	connectToAP()
+	connectToMQTT()
 
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(server).SetClientID("tinygo-rabbitfeeder")
-
-	println("Connecting to MQTT broker at", server)
-	cl = mqtt.NewClient(opts)
-	if token := cl.Connect(); token.Wait() && token.Error() != nil {
-		failMessage(token.Error().Error())
+	// DISCOVERY MESSAGE
+	println("Marshalling Discovery Message, if no action after this, increase stack size with --stack-size 10KB")
+	data, err := json.Marshal(ShortDiscoveryMsg)
+	if err != nil {
+		println("ERROR DISCOVERY", err)
 	}
-
-	// subscribe
-	token := cl.Subscribe(topicRx, 0, subHandler)
+	token := cl.Publish("discovery", 0, false, data)
 	token.Wait()
 	if token.Error() != nil {
-		failMessage(token.Error().Error())
+		println(token.Error().Error())
 	}
 
-	go publishing()
+	//go publishing()
 
 	value := distanceSensor.Read()
 	var dt time.Time
 	var temp int32
-	var err error
 	var n int
-	eepromData := make([]byte, 40)
+	eepromData := make([]byte, 48)
+
+	sensorData[DISTANCE] = Value{
+		ID: "c",
+	}
+	sensorData[DISTANCE_RAW] = Value{
+		ID: "cr",
+	}
+	sensorData[MEMORY] = Value{
+		ID: "m",
+	}
+	sensorData[TEMPERATURE] = Value{
+		ID: "t",
+	}
+	sensorData[PRESSURE] = Value{
+		ID: "p",
+	}
+	sensorData[HUMIDITY] = Value{
+		ID: "h",
+	}
+	sensorData[RTC] = Value{
+		ID: "rtc",
+	}
+
 	for {
 		value = distanceSensor.Read()
-		println("Distancia:", value)
+		println("Distance:", value)
+		sensorData[DISTANCE].Value = value
+		sensorData[DISTANCE_RAW].Value = value
 
 		dt, err = rtc.ReadTime()
 		if err != nil {
@@ -151,24 +195,49 @@ func main() {
 		} else {
 			println(dt.Year(), dt.Month(), dt.Day(), dt.Hour(), dt.Minute(), dt.Second())
 		}
+		sensorData[RTC].Value = dt.Unix()
+
 		temp, _ = rtc.ReadTemperature()
 		println("Temperature (RTC):", temp)
+		sensorData[TEMPERATURE].Value = temp
 
 		temp, _ = temperatureSensor.ReadTemperature()
 		println("Temperature (BME280):", temp)
+		sensorData[TEMPERATURE].Value = temp
 		temp, _ = temperatureSensor.ReadPressure()
 		println("Pressure (BME280):", temp)
+		sensorData[PRESSURE].Value = temp
 		temp, _ = temperatureSensor.ReadHumidity()
 		println("Humidity (BME280):", temp)
+		sensorData[HUMIDITY].Value = temp
 
 		n, err = eeprom.Read(eepromData)
 		println(n, err)
-		for i := 0; i < 40; i++ {
+		for i := 0; i < 48; i++ {
 			print(eepromData[i])
 		}
 		println("==========")
+		sensorData[MEMORY].Value = eepromData
 
-		time.Sleep(time.Second * 1)
+		data, err = json.Marshal(sensorData)
+		if err != nil {
+			println("ERROR MARSHALLING SENSOR DATA", err)
+		} else {
+			token = cl.Publish(DeviceID, 0, false, data)
+			token.Wait()
+			if token.Error() != nil {
+				println(token.Error().Error())
+				println("Retrying publish...")
+				connectToMQTT()
+				token = cl.Publish(DeviceID, 0, false, data)
+				token.Wait()
+				if token.Error() != nil {
+					println(token.Error().Error())
+				}
+			}
+		}
+
+		time.Sleep(time.Second * 60)
 	}
 
 	/*i := 0
