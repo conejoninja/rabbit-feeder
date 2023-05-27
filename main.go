@@ -32,6 +32,8 @@ var (
 	eepromEnabled            bool
 
 	sensorData [7]Value
+	data       []byte
+	err        error
 )
 
 const (
@@ -60,6 +62,27 @@ func main() {
 
 	time.Sleep(5 * time.Second)
 	println("online")
+
+	// SETUP RELAY
+	relay = [4]machine.Pin{
+		machine.D5,
+		machine.D4,
+		machine.D3,
+		machine.D2,
+	}
+	for i := 0; i < 4; i++ {
+		relay[i].Configure(machine.PinConfig{Mode: machine.PinOutput})
+		relay[i].Low()
+	}
+
+	// SETUP THE MOTOR
+	dirPin = machine.D10
+	stepPin = machine.D9
+	sleepPin = machine.D8
+	dirPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	stepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	sleepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	sleepPin.High()
 
 	machine.I2C0.Configure(machine.I2CConfig{})
 
@@ -102,26 +125,6 @@ func main() {
 	eeprom.Configure(at24cx.Config{})
 	eepromEnabled = true // assume it's working
 
-	// SETUP RELAY
-	relay = [4]machine.Pin{
-		machine.D5,
-		machine.D4,
-		machine.D3,
-		machine.D2,
-	}
-	for i := 0; i < 4; i++ {
-		relay[i].Configure(machine.PinConfig{Mode: machine.PinOutput})
-	}
-
-	// SETUP THE MOTOR
-	dirPin = machine.D10
-	stepPin = machine.D9
-	sleepPin = machine.D8
-	dirPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	stepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	sleepPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	sleepPin.High()
-
 	// Configure SPI for 8Mhz, Mode 0, MSB First
 	spi.Configure(machine.SPIConfig{
 		Frequency: 8 * 1e6,
@@ -140,20 +143,9 @@ func main() {
 
 	connectToAP()
 	connectToMQTT()
-
-	// DISCOVERY MESSAGE
-	println("Marshalling Discovery Message, if no action after this, increase stack size with --stack-size 10KB")
-	data, err := json.Marshal(ShortDiscoveryMsg)
-	if err != nil {
-		println("ERROR DISCOVERY", err)
-	}
-	token := cl.Publish("discovery", 0, false, data)
-	token.Wait()
-	if token.Error() != nil {
-		println(token.Error().Error())
-	}
-
-	//go publishing()
+	publishDiscovery()
+	// Let discovery message to be processed and other devices subscribe to it
+	time.Sleep(2 * time.Second)
 
 	value := distanceSensor.Read()
 	var dt time.Time
@@ -223,64 +215,10 @@ func main() {
 		if err != nil {
 			println("ERROR MARSHALLING SENSOR DATA", err)
 		} else {
-			token = cl.Publish(DeviceID, 0, false, data)
-			token.Wait()
-			if token.Error() != nil {
-				println(token.Error().Error())
-				println("Retrying publish...")
-				connectToMQTT()
-				token = cl.Publish(DeviceID, 0, false, data)
-				token.Wait()
-				if token.Error() != nil {
-					println(token.Error().Error())
-				}
-			}
+			publishData(DeviceID, &data)
 		}
 
 		time.Sleep(time.Second * 60)
 	}
-
-	/*i := 0
-	d := 0
-	for {
-		if d == 0 {
-			relay[i].High()
-		} else {
-			relay[i].Low()
-		}
-		i++
-		if i >= 4 {
-			i = 0
-			if d == 0 {
-				d = 1
-			} else {
-				d = 0
-			}
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	for {
-		println("high")
-
-		dirPin.High()
-		for s := 0; s < 6000; s++ {
-			stepPin.High()
-			time.Sleep(1 * time.Millisecond)
-			stepPin.Low()
-			time.Sleep(1 * time.Millisecond)
-		}
-
-		time.Sleep(2 * time.Second)
-		println("low")
-		dirPin.Low()
-		for s := 0; s < 600; s++ {
-			stepPin.High()
-			time.Sleep(1 * time.Millisecond)
-			stepPin.Low()
-			time.Sleep(1 * time.Millisecond)
-		}
-		time.Sleep(2 * time.Second)
-	}*/
 
 }

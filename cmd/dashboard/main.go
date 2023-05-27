@@ -79,6 +79,7 @@ var discoveryHandler mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Mes
 	err := json.Unmarshal(msg.Payload(), &discovery)
 	if err != nil {
 		fmt.Println("Error Unmarshalling DISCOVERY", err)
+		return
 	}
 
 	if v, ok := subscriptions[discovery.ID]; !ok || !v {

@@ -88,6 +88,10 @@ var DiscoveryMsg = Device{
 	},
 	Methods: []Method{
 		Method{
+			Name:        "info",
+			Description: "Returns device info",
+		},
+		Method{
 			Name:        "gm",
 			Description: "Get the EEPROM",
 		},
@@ -108,6 +112,30 @@ var DiscoveryMsg = Device{
 		Method{
 			Name:        "grtc",
 			Description: "Get the RTC datetime",
+		},
+		Method{
+			Name:        "food",
+			Description: "Dispense food",
+			Params: []Value{
+				Value{
+					ID:   "q",
+					Name: "Quantity",
+				},
+			},
+		},
+		Method{
+			Name:        "relay",
+			Description: "Set relay status",
+			Params: []Value{
+				Value{
+					ID:   "r",
+					Name: "Relay number",
+				},
+				Value{
+					ID:   "s",
+					Name: "Status (on/off)",
+				},
+			},
 		},
 	},
 }

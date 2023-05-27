@@ -1,8 +1,9 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"machine"
+	"strconv"
 	"time"
 
 	"tinygo.org/x/drivers/net/mqtt"
@@ -23,50 +24,91 @@ var (
 	adaptor *wifinina.Device
 
 	cl             mqtt.Client
+	token          mqtt.Token
 	topicPublish   = DeviceID
 	topicSubscribe = DeviceID + "-call"
+
+	connectedWifi bool
+	connectedMQTT bool
+
+	relayID     string
+	relayStatus string
 )
 
 func subHandler(client mqtt.Client, msg mqtt.Message) {
-	fmt.Printf("[%s]  ", msg.Topic())
-	fmt.Printf("%s\r\n", msg.Payload())
-}
-
-func publishing() {
-	for i := 0; ; i++ {
-		println("Publishing MQTT message...")
-		data := []byte(fmt.Sprintf(`{"e":[{"n":"hello %d","v":101}]}`, i))
-		token := cl.Publish(topicSubscribe, 0, false, data)
-		token.Wait()
-		if token.Error() != nil {
-			println(token.Error().Error())
+	println("[", msg.Topic(), "] ", string(msg.Payload()))
+	var fns []Method
+	err := json.Unmarshal(msg.Payload(), &fns)
+	if err != nil {
+		println("ERROR UnMarshalling rabbitf3-call payload", err)
+		return
+	}
+	for _, f := range fns {
+		println(f.Name)
+		switch f.Name {
+		case "info":
+			data, err = json.Marshal(DiscoveryMsg)
+			if err != nil {
+				println("[INFO]", err)
+			}
+			publishData("discovery", &data)
+			break
+		case "gm":
+			break
+		case "sm":
+			break
+		case "grtc":
+			break
+		case "relay":
+			relayID = ""
+			relayStatus = ""
+			for _, p := range f.Params {
+				if p.ID == "r" {
+					relayID = p.Value.(string)
+				} else if p.ID == "s" {
+					relayStatus = p.Value.(string)
+				}
+			}
+			if relayID != "" && relayStatus != "" {
+				i, _ := strconv.Atoi(relayID)
+				if relayStatus == "1" || relayStatus == "on" {
+					relay[i].High()
+				} else if relayStatus == "0" || relayStatus == "off" {
+					relay[i].Low()
+				}
+			}
+			break
+		case "food":
+			break
+		default:
 		}
-
-		time.Sleep(30000 * time.Millisecond)
 	}
 }
 
-// connect to access point
 func connectToAP() {
 	time.Sleep(2 * time.Second)
-	println("Connecting to " + WifiSSID)
-	err := adaptor.ConnectToAccessPoint(WifiSSID, WifiPassword, 10*time.Second)
-	if err != nil { // error connecting to AP
-		for {
-			println(err)
-			time.Sleep(1 * time.Second)
+	for {
+		println("Connecting to " + WifiSSID)
+		err := adaptor.ConnectToAccessPoint(WifiSSID, WifiPassword, 10*time.Second)
+		if err == nil { // error connecting to AP
+			println("Connected.")
+
+			time.Sleep(2 * time.Second)
+			ip, _, _, err := adaptor.GetIP()
+			for ; err != nil; ip, _, _, err = adaptor.GetIP() {
+				println("[GET IP]", err.Error())
+				time.Sleep(1 * time.Second)
+			}
+			println("[IP]", ip.String())
+			connectedWifi = true
+			break
+		} else {
+			println("[CONNECT TO AP]", err)
+			println("Waiting 30s before trying to reconnect")
+			connectedWifi = false
+			time.Sleep(30 * time.Second)
 		}
 	}
-
-	println("Connected.")
-
-	time.Sleep(2 * time.Second)
-	ip, _, _, err := adaptor.GetIP()
-	for ; err != nil; ip, _, _, err = adaptor.GetIP() {
-		println(err.Error())
-		time.Sleep(1 * time.Second)
-	}
-	println(ip.String())
 }
 
 func connectToMQTT() {
@@ -80,21 +122,48 @@ func connectToMQTT() {
 	cl = mqtt.NewClient(opts)
 
 	if token := cl.Connect(); token.Wait() && token.Error() != nil {
-		failMessage(token.Error().Error())
+		println("[MQTT CONNECT]", token.Error().Error())
+		connectedMQTT = false
 	}
 	println("Connected to MQTT")
 
 	// subscribe
-	token := cl.Subscribe(topicSubscribe, 0, subHandler)
+	token := cl.Subscribe("#", 0, subHandler)
 	token.Wait()
 	if token.Error() != nil {
-		failMessage(token.Error().Error())
+		println("[MQTT SUBSCRIBE]", token.Error().Error())
+		connectedMQTT = false
+	}
+	connectedMQTT = true
+}
+
+func publishDiscovery() {
+	// DISCOVERY MESSAGE
+	println("Marshalling Discovery Message, if no action after this, increase stack size with --stack-size 10KB")
+	data, err = json.Marshal(ShortDiscoveryMsg)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token := cl.Publish("discovery", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
 	}
 }
 
-func failMessage(msg string) {
-	for {
-		println(msg)
-		time.Sleep(1 * time.Second)
+func publishData(topic string, data *[]byte) {
+	println("[PUBLISH DATA]", "#"+topic, "MSG TO SEND", string(*data))
+	token = cl.Publish(topic, 0, false, *data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[PUBLISH DATA]", token.Error().Error())
+		println("[PUBLISH DATA]", "Retrying publish...")
+		connectToMQTT()
+		token = cl.Publish(topic, 0, false, *data)
+		token.Wait()
+		if token.Error() != nil {
+			println("[PUBLISH DATA]", token.Error().Error())
+		}
 	}
 }
