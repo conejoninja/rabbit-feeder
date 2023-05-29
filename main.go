@@ -31,9 +31,10 @@ var (
 	rtcEnabled               bool
 	eepromEnabled            bool
 
-	sensorData [7]Value
-	data       []byte
-	err        error
+	sensorState SensorState
+	relayState  RelayState
+	data        []byte
+	err         error
 )
 
 const (
@@ -153,33 +154,10 @@ func main() {
 	var n int
 	eepromData := make([]byte, 48)
 
-	sensorData[DISTANCE] = Value{
-		ID: "c",
-	}
-	sensorData[DISTANCE_RAW] = Value{
-		ID: "cr",
-	}
-	sensorData[MEMORY] = Value{
-		ID: "m",
-	}
-	sensorData[TEMPERATURE] = Value{
-		ID: "t",
-	}
-	sensorData[PRESSURE] = Value{
-		ID: "p",
-	}
-	sensorData[HUMIDITY] = Value{
-		ID: "h",
-	}
-	sensorData[RTC] = Value{
-		ID: "rtc",
-	}
-
 	for {
 		value = distanceSensor.Read()
 		println("Distance:", value)
-		sensorData[DISTANCE].Value = value
-		sensorData[DISTANCE_RAW].Value = value
+		sensorState.Distance = value
 
 		dt, err = rtc.ReadTime()
 		if err != nil {
@@ -187,21 +165,21 @@ func main() {
 		} else {
 			println(dt.Year(), dt.Month(), dt.Day(), dt.Hour(), dt.Minute(), dt.Second())
 		}
-		sensorData[RTC].Value = dt.Unix()
+		sensorState.Timestamp = dt.Unix()
 
-		temp, _ = rtc.ReadTemperature()
+		/*temp, _ = rtc.ReadTemperature()
 		println("Temperature (RTC):", temp)
-		sensorData[TEMPERATURE].Value = temp
+		sensorState.Temperature = temp*/
 
 		temp, _ = temperatureSensor.ReadTemperature()
 		println("Temperature (BME280):", temp)
-		sensorData[TEMPERATURE].Value = temp
+		sensorState.Temperature = temp
 		temp, _ = temperatureSensor.ReadPressure()
 		println("Pressure (BME280):", temp)
-		sensorData[PRESSURE].Value = temp
+		sensorState.Pressure = temp
 		temp, _ = temperatureSensor.ReadHumidity()
 		println("Humidity (BME280):", temp)
-		sensorData[HUMIDITY].Value = temp
+		sensorState.Humidity = temp
 
 		n, err = eeprom.Read(eepromData)
 		println(n, err)
@@ -209,16 +187,42 @@ func main() {
 			print(eepromData[i])
 		}
 		println("==========")
-		sensorData[MEMORY].Value = eepromData
+		sensorState.EEPROM = eepromData
 
-		data, err = json.Marshal(sensorData)
+		data, err = json.Marshal(sensorState)
 		if err != nil {
 			println("ERROR MARSHALLING SENSOR DATA", err)
 		} else {
-			publishData(DeviceID, &data)
+			publishData(sensorStateTopic, &data)
 		}
+
+		sendRelayStatus()
 
 		time.Sleep(time.Second * 60)
 	}
+}
 
+func sendRelayStatus() {
+	relayState.Relay1 = "OFF"
+	relayState.Relay2 = "OFF"
+	relayState.Relay3 = "OFF"
+	relayState.Relay4 = "OFF"
+	if relay[0].Get() {
+		relayState.Relay1 = "ON"
+	}
+	if relay[1].Get() {
+		relayState.Relay2 = "ON"
+	}
+	if relay[2].Get() {
+		relayState.Relay3 = "ON"
+	}
+	if relay[3].Get() {
+		relayState.Relay4 = "ON"
+	}
+	data, err = json.Marshal(relayState)
+	if err != nil {
+		println("ERROR MARSHALLING RELAY DATA", err)
+	} else {
+		publishData(relayStateTopic, &data)
+	}
 }

@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"machine"
-	"strconv"
+	"strings"
 	"time"
 
 	"tinygo.org/x/drivers/net/mqtt"
@@ -23,10 +23,8 @@ var (
 	// this is the ESP chip that has the WIFININA firmware flashed on it
 	adaptor *wifinina.Device
 
-	cl             mqtt.Client
-	token          mqtt.Token
-	topicPublish   = DeviceID
-	topicSubscribe = DeviceID + "-call"
+	cl    mqtt.Client
+	token mqtt.Token
 
 	connectedWifi bool
 	connectedMQTT bool
@@ -35,54 +33,56 @@ var (
 	relayStatus string
 )
 
-func subHandler(client mqtt.Client, msg mqtt.Message) {
-	println("[", msg.Topic(), "] ", string(msg.Payload()))
-	var fns []Method
-	err := json.Unmarshal(msg.Payload(), &fns)
-	if err != nil {
-		println("ERROR UnMarshalling rabbitf3-call payload", err)
+func relayHandler(topics []string, payload string) {
+	if len(topics) < 4 || topics[3] != "set" {
 		return
 	}
-	for _, f := range fns {
-		println(f.Name)
-		switch f.Name {
-		case "info":
-			data, err = json.Marshal(DiscoveryMsg)
-			if err != nil {
-				println("[INFO]", err)
-			}
-			publishData("discovery", &data)
-			break
-		case "gm":
-			break
-		case "sm":
-			break
-		case "grtc":
-			break
-		case "relay":
-			relayID = ""
-			relayStatus = ""
-			for _, p := range f.Params {
-				if p.ID == "r" {
-					relayID = p.Value.(string)
-				} else if p.ID == "s" {
-					relayStatus = p.Value.(string)
-				}
-			}
-			if relayID != "" && relayStatus != "" {
-				i, _ := strconv.Atoi(relayID)
-				if relayStatus == "1" || relayStatus == "on" {
-					relay[i].High()
-				} else if relayStatus == "0" || relayStatus == "off" {
-					relay[i].Low()
-				}
-			}
-			break
-		case "food":
-			break
-		default:
+
+	switch topics[2] {
+	case "relay1":
+		if payload == "ON" {
+			relay[0].High()
+		} else if payload == "OFF" {
+			relay[0].Low()
 		}
+		break
+	case "relay2":
+		if payload == "ON" {
+			relay[1].High()
+		} else if payload == "OFF" {
+			relay[1].Low()
+		}
+		break
+	case "relay3":
+		if payload == "ON" {
+			relay[2].High()
+		} else if payload == "OFF" {
+			relay[2].Low()
+		}
+		break
+	case "relay4":
+		if payload == "ON" {
+			relay[3].High()
+		} else if payload == "OFF" {
+			relay[3].Low()
+		}
+		break
+	default:
+		break
 	}
+	sendRelayStatus()
+}
+
+func subHandler(client mqtt.Client, msg mqtt.Message) {
+	println("[", msg.Topic(), "] ", string(msg.Payload()))
+	topics := strings.Split(msg.Topic(), "/")
+	if topics[0] != "homeassistant" {
+		return
+	}
+	if len(topics) > 1 && topics[1] == "switch" {
+		relayHandler(topics, string(msg.Payload()))
+	}
+
 }
 
 func connectToAP() {
@@ -104,9 +104,9 @@ func connectToAP() {
 			break
 		} else {
 			println("[CONNECT TO AP]", err)
-			println("Waiting 30s before trying to reconnect")
+			println("Waiting 15s before trying to reconnect")
 			connectedWifi = false
-			time.Sleep(30 * time.Second)
+			time.Sleep(15 * time.Second)
 		}
 	}
 }
@@ -139,13 +139,123 @@ func connectToMQTT() {
 
 func publishDiscovery() {
 	// DISCOVERY MESSAGE
-	println("Marshalling Discovery Message, if no action after this, increase stack size with --stack-size 10KB")
-	data, err = json.Marshal(ShortDiscoveryMsg)
+	println("Marshalling Discovery Messages, if no action after this, increase stack size with --stack-size 10KB")
+	data, err = json.Marshal(Relay1Discovery)
 	if err != nil {
 		println("[DISCOVERY]", err)
 	}
 	println("[DISCOVERY]", string(data))
-	token := cl.Publish("discovery", 0, false, data)
+	token := cl.Publish(Relay1Discovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(Relay2Discovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(Relay2Discovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(Relay3Discovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(Relay3Discovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(Relay4Discovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(Relay4Discovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(TemperatureDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(TemperatureDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(PressureDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(PressureDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(HumidityDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(HumidityDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(DistanceDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(DistanceDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(EEPROMDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(EEPROMDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(RTCDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(RTCDiscovery.Home+"/config", 0, false, data)
+	token.Wait()
+	if token.Error() != nil {
+		println("[DISCOVERY]", token.Error().Error())
+	}
+
+	data, err = json.Marshal(MotorDiscovery)
+	if err != nil {
+		println("[DISCOVERY]", err)
+	}
+	println("[DISCOVERY]", string(data))
+	token = cl.Publish(MotorDiscovery.Home+"/config", 0, false, data)
 	token.Wait()
 	if token.Error() != nil {
 		println("[DISCOVERY]", token.Error().Error())
