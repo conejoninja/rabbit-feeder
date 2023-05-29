@@ -35,6 +35,12 @@ var (
 	relayState  RelayState
 	data        []byte
 	err         error
+
+	distance   uint16
+	dt         time.Time
+	temp       int32
+	n          int
+	eepromData []byte
 )
 
 const (
@@ -125,6 +131,7 @@ func main() {
 	eeprom := at24cx.New(machine.I2C0)
 	eeprom.Configure(at24cx.Config{})
 	eepromEnabled = true // assume it's working
+	eepromData = make([]byte, 48)
 
 	// Configure SPI for 8Mhz, Mode 0, MSB First
 	spi.Configure(machine.SPIConfig{
@@ -148,57 +155,55 @@ func main() {
 	// Let discovery message to be processed and other devices subscribe to it
 	time.Sleep(2 * time.Second)
 
-	value := distanceSensor.Read()
-	var dt time.Time
-	var temp int32
-	var n int
-	eepromData := make([]byte, 48)
-
 	for {
-		value = distanceSensor.Read()
-		println("Distance:", value)
-		sensorState.Distance = value
 
-		dt, err = rtc.ReadTime()
-		if err != nil {
-			println("Error reading date:", err)
-		} else {
-			println(dt.Year(), dt.Month(), dt.Day(), dt.Hour(), dt.Minute(), dt.Second())
-		}
-		sensorState.Timestamp = dt.Unix()
-
-		/*temp, _ = rtc.ReadTemperature()
-		println("Temperature (RTC):", temp)
-		sensorState.Temperature = temp*/
-
-		temp, _ = temperatureSensor.ReadTemperature()
-		println("Temperature (BME280):", temp)
-		sensorState.Temperature = temp
-		temp, _ = temperatureSensor.ReadPressure()
-		println("Pressure (BME280):", temp)
-		sensorState.Pressure = temp
-		temp, _ = temperatureSensor.ReadHumidity()
-		println("Humidity (BME280):", temp)
-		sensorState.Humidity = temp
-
-		n, err = eeprom.Read(eepromData)
-		println(n, err)
-		for i := 0; i < 48; i++ {
-			print(eepromData[i])
-		}
-		println("==========")
-		sensorState.EEPROM = eepromData
-
-		data, err = json.Marshal(sensorState)
-		if err != nil {
-			println("ERROR MARSHALLING SENSOR DATA", err)
-		} else {
-			publishData(sensorStateTopic, &data)
-		}
-
+		sendSensorStatus()
 		sendRelayStatus()
 
 		time.Sleep(time.Second * 60)
+	}
+}
+
+func sendSensorStatus() {
+	distance = distanceSensor.Read()
+	println("Distance:", distance)
+	sensorState.Distance = distance
+
+	dt, err = rtc.ReadTime()
+	if err != nil {
+		println("Error reading date:", err)
+	} else {
+		println(dt.Year(), dt.Month(), dt.Day(), dt.Hour(), dt.Minute(), dt.Second())
+	}
+	sensorState.Date = dt.Format(time.RFC3339)
+
+	/*temp, _ = rtc.ReadTemperature()
+	println("Temperature (RTC):", temp)
+	sensorState.Temperature = temp*/
+
+	temp, _ = temperatureSensor.ReadTemperature()
+	println("Temperature (BME280):", temp)
+	sensorState.Temperature = temp
+	temp, _ = temperatureSensor.ReadPressure()
+	println("Pressure (BME280):", temp)
+	sensorState.Pressure = temp
+	temp, _ = temperatureSensor.ReadHumidity()
+	println("Humidity (BME280):", temp)
+	sensorState.Humidity = temp
+
+	n, err = eeprom.Read(eepromData)
+	println(n, err)
+	for i := 0; i < 48; i++ {
+		print(eepromData[i])
+	}
+	println("==========")
+	sensorState.EEPROM = eepromData
+
+	data, err = json.Marshal(sensorState)
+	if err != nil {
+		println("ERROR MARSHALLING SENSOR DATA", err)
+	} else {
+		publishData(sensorStateTopic, &data)
 	}
 }
 

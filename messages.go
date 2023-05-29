@@ -28,7 +28,7 @@ type SensorState struct {
 	Pressure    int32  `json:"pressure,omitempty"`
 	Distance    uint16 `json:"distance,omitempty"`
 	EEPROM      []byte `json:"eeprom,omitempty"`
-	Timestamp   int64  `json:"timestamp,omitempty"`
+	Date        string `json:"date,omitempty"`
 }
 
 type RelayState struct {
